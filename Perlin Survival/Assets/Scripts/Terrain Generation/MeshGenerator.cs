@@ -14,8 +14,10 @@ public static class MeshGenerator
      * @param levelOfDetail A value that determines the number of vertices and triangles in the mesh
      * @return meshData The data of the mesh
      */
-    public static MeshData GenerateTerrainMesh(float[,] heightMap, float heightMultiplier, AnimationCurve heightCurve, int levelOfDetail)
+    public static MeshData GenerateTerrainMesh(float[,] heightMap, float heightMultiplier, AnimationCurve _heightCurve, int levelOfDetail)
     {
+        // Created a new animation curve to avoid a weird issue from occurring
+        AnimationCurve heightCurve = new AnimationCurve(_heightCurve.keys);
         int width = heightMap.GetLength(0);
         int height = heightMap.GetLength(1);
         // Values used in calculating the mesh vertices

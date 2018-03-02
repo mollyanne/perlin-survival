@@ -7,12 +7,18 @@ using UnityEngine;
  */
 public class InfiniteTerrain : MonoBehaviour
 {
-    // View distance affects the number of chunks that will be loaded around the viewer
-    public const float maxViewDistance = 450;
+    // Distance the viewer must move to initiate a chunk update
+    const float distanceThresholdForChunkUpdate = 25f;
+    const float sqrDistanceThresholdForChunkUpdate = distanceThresholdForChunkUpdate * distanceThresholdForChunkUpdate;
 
+    // Array of detail levels set in the editor
+    public LODInfo[] detailLevels;
+    // View distance affects the number of chunks that will be loaded around the viewer
+    public static float maxViewDistance;
     public Transform viewer;
     public Material mapMaterial;
     public static Vector2 viewerPosition;
+    Vector2 oldViewerPosition; 
     static MapGenerator mapGenerator;
 
     int chunkSize;
@@ -28,8 +34,13 @@ public class InfiniteTerrain : MonoBehaviour
     void Start()
     {
         mapGenerator = FindObjectOfType<MapGenerator>();
+
+        // Set the max distance according to the furthest detail level away
+        maxViewDistance = detailLevels[detailLevels.Length - 1].distanceThreshold;
         chunkSize = MapGenerator.mapChunkSize - 1;
         chunksVisibleInView = Mathf.RoundToInt(maxViewDistance / chunkSize);
+
+        UpdateVisibleChunks();
     }
 
     /**
@@ -38,7 +49,11 @@ public class InfiniteTerrain : MonoBehaviour
     void Update()
     {
         viewerPosition = new Vector2(viewer.position.x, viewer.position.z);
-        UpdateVisibleChunks();
+
+        if ((oldViewerPosition - viewerPosition).sqrMagnitude > distanceThresholdForChunkUpdate) {
+            oldViewerPosition = viewerPosition;
+            UpdateVisibleChunks();
+        }
     }
 
     /**
@@ -71,7 +86,7 @@ public class InfiniteTerrain : MonoBehaviour
                         terrainChunksPreviouslyVisible.Add(terrainChunks[viewedChunkCoord]);
                     }
                 } else {
-                    terrainChunks.Add(viewedChunkCoord, new TerrainChunk(viewedChunkCoord, chunkSize, transform, mapMaterial));
+                    terrainChunks.Add(viewedChunkCoord, new TerrainChunk(viewedChunkCoord, chunkSize, detailLevels, transform, mapMaterial));
                 }
             }
         }
@@ -88,15 +103,21 @@ public class InfiniteTerrain : MonoBehaviour
         Bounds bounds;
 
         MapData mapData;
+        bool mapDataRecieved;
+        int previousLODIndex = -1;
 
         MeshRenderer meshRenderer;
         MeshFilter meshFilter;
 
+        LODInfo[] detailLevels;
+        LODMesh[] lodMeshes;
+
         /**
          * Constructor; initializes all default values
          */
-        public TerrainChunk(Vector2 coord, int size, Transform parent, Material material)
+        public TerrainChunk(Vector2 coord, int size, LODInfo[] detailLevels, Transform parent, Material material)
         {
+            this.detailLevels = detailLevels;
             position = coord * size;
             bounds = new Bounds(position, Vector2.one * size);
             Vector3 position3 = new Vector3(position.x, 0, position.y);
@@ -112,17 +133,28 @@ public class InfiniteTerrain : MonoBehaviour
             // Default setting is invisible
             SetVisible(false);
 
-            mapGenerator.RequestMapData(OnMapDataRecieved);
+            // Setup variable LOD meshes for chunk
+            lodMeshes = new LODMesh[detailLevels.Length];
+
+            for (int i = 0; i < detailLevels.Length; i++) {
+                lodMeshes[i] = new LODMesh(detailLevels[i].lod, UpdateTerrainChunk);
+            }
+
+            mapGenerator.RequestMapData(position, OnMapDataRecieved);
         }
 
+        /**
+         * Method for keeping track of whether or not map data has been recieved for convenience
+         */
         void OnMapDataRecieved(MapData mapData)
         {
-            mapGenerator.RequestMeshData(mapData, OnMeshDataRecieved);
-        }
+            this.mapData = mapData;
+            mapDataRecieved = true;
 
-        void OnMeshDataRecieved(MeshData meshData)
-        {
-            meshFilter.mesh = meshData.CreateMesh();
+            Texture2D texture = TextureGenerator.TextureFromColorMap(mapData.colorMap, MapGenerator.mapChunkSize, MapGenerator.mapChunkSize);
+            meshRenderer.material.mainTexture = texture;
+
+            UpdateTerrainChunk();
         }
 
         /**
@@ -130,15 +162,43 @@ public class InfiniteTerrain : MonoBehaviour
          */
         public void UpdateTerrainChunk()
         {
-            float viewerDistFromNearestChunk = bounds.SqrDistance(viewerPosition);
-            bool visible = viewerDistFromNearestChunk <= (maxViewDistance * maxViewDistance);
+            if (mapDataRecieved) {
+                float viewerDistFromNearestChunk = Mathf.Sqrt(bounds.SqrDistance(viewerPosition));
+                bool visible = viewerDistFromNearestChunk <= maxViewDistance;
 
-            SetVisible(visible);
+                if (visible) {
+                    int lodIndex = 0;
+
+                    // Calculates the index of the array of detail levels that each chunk should display
+                    for (int i = 0; i < detailLevels.Length - 1; i++) {
+                        if (viewerDistFromNearestChunk > detailLevels[i].distanceThreshold) {
+                            lodIndex = i + 1;
+                        } else {
+                            break;
+                        }
+                    }
+
+                    // Set mesh according to the correct index calculated above
+                    if (lodIndex != previousLODIndex) {
+                        LODMesh lodMesh = lodMeshes[lodIndex];
+
+                        if (lodMesh.hasMesh) {
+                            previousLODIndex = lodIndex;
+
+                            meshFilter.mesh = lodMesh.mesh;
+                        } else if (!lodMesh.hasRequestedMesh) {
+                            lodMesh.RequestMesh(mapData);
+                        }
+                    }
+                }
+
+                SetVisible(visible);
+            }
         }
 
         /**
          * Toggles the chunk's visibility
-         */ 
+         */
         public void SetVisible(bool visible)
         {
             meshObject.SetActive(visible);
@@ -151,5 +211,50 @@ public class InfiniteTerrain : MonoBehaviour
         {
             return meshObject.activeSelf;
         }
+    }
+
+    /**
+     * Class that controls the level of detail for a mesh
+     */
+    class LODMesh
+    {
+        public Mesh mesh;
+        public bool hasRequestedMesh;
+        public bool hasMesh;
+
+        System.Action updateCallback;
+
+        int lod;
+
+        public LODMesh(int lod, System.Action updateCallback)
+        {
+            this.updateCallback = updateCallback;
+            this.lod = lod;
+        }
+
+        void OnMeshDataRecieved(MeshData meshData)
+        {
+            mesh = meshData.CreateMesh();
+            hasMesh = true;
+
+            updateCallback();
+        }
+
+        public void RequestMesh(MapData mapData)
+        {
+            hasRequestedMesh = true;
+
+            mapGenerator.RequestMeshData(mapData, lod, OnMeshDataRecieved);
+        }
+    }
+
+    /**
+     * Struct containing the info that specifies the LOD of an area and how far away it has to be to qualify; modifiable in the editor
+     */
+    [System.Serializable]
+    public struct LODInfo
+    {
+        public int lod;
+        public float distanceThreshold;
     }
 }
