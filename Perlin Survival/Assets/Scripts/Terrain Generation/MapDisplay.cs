@@ -24,11 +24,12 @@ public class MapDisplay : MonoBehaviour
     /**
      * Draws the mesh to the MeshFilter and MeshRenderer
      * @param meshData The data of the mesh
-     * @param texture The texture the mesh will use
      */
-    public void DrawMesh(MeshData meshData, Texture2D texture)
+    public void DrawMesh(MeshData meshData)
     {
         meshFilter.sharedMesh = meshData.CreateMesh();
-        meshRenderer.sharedMaterial.mainTexture = texture;
+
+        // Scale mesh according to our uniform scale
+        meshFilter.transform.localScale = Vector3.one * FindObjectOfType<MapGenerator>().terrainData.uniformScale;
     }
 }

@@ -7,6 +7,8 @@ using UnityEngine;
  */ 
 public static class Noise
 {
+    public enum NormalizeMode {Local, Global}
+
     /**
      * Method that generates the noise map (a 2D representation of what the 3D terrarin will look like)
      * @param mapChunkSize Width of the generated map
@@ -17,23 +19,31 @@ public static class Noise
      * @param persistence Controls the amount that the amplitude of the octaves increases
      * @param lacunarity Controls the amount that the frequency of the octaves increases
      * @param offset Allows the generated terrain to be "scrolled"
+     * @param normalizeMode The mode in which the terrain heights are normalized based on a curve
      */
-    public static float[,] GenerateNoiseMap(int mapWidth, int mapHeight, int seed, float scale, int octaves, float persistence, float lacunarity, Vector2 offset)
+    public static float[,] GenerateNoiseMap(int mapWidth, int mapHeight, int seed, float scale, int octaves, float persistence, float lacunarity, Vector2 offset, NormalizeMode normalizeMode)
     {
         // Noise map initialized
         float[,] noiseMap = new float[mapWidth, mapHeight];
 
-        // Nandom number generator for the offset
+        // Random number generator for the offset
         System.Random rng = new System.Random(seed);
         // Allows each octave to sample from a different point in the noise
         Vector2[] octaveOffsets = new Vector2[octaves];
 
-        // Net the octave offsets
+        float maxPossibleHeight = 0;
+        float amplitude = 1;
+        float frequency = 1;
+
+        // Set the octave offsets
         for (int i = 0; i < octaves; i++) {
             float offsetX = rng.Next(-100000, 100000) + offset.x;
-            float offsetY = rng.Next(-100000, 100000) + offset.y;
+            float offsetY = rng.Next(-100000, 100000) - offset.y;
 
             octaveOffsets[i] = new Vector2(offsetX, offsetY);
+
+            maxPossibleHeight += amplitude;
+            amplitude *= persistence;
         }
 
         // Divide-by-zero preventificator
@@ -41,9 +51,9 @@ public static class Noise
             scale = 0.0001f;
         }
 
-        // Variables for keeping track of max and min noise (terrain) heights
-        float maxNoiseHeight = float.MinValue;
-        float minNoiseHeight = float.MaxValue;
+        // Variables for keeping track of local max and min noise (terrain) heights
+        float maxLocalNoiseHeight = float.MinValue;
+        float minLocalNoiseHeight = float.MaxValue;
 
         // For use in aligning the noise scale to the center rather than top right
         float halfWidth = mapWidth / 2f;
@@ -53,15 +63,15 @@ public static class Noise
         for (int y = 0; y < mapHeight; y++) {
             for (int x = 0; x < mapWidth; x++) {
                 // Default values
-                float amplitude = 1;
-                float frequency = 1;
+                amplitude = 1;
+                frequency = 1;
                 float noiseHeight = 0;
 
                 // Applying the octaves
                 for (int i = 0; i < octaves; i++) {
                     // Applying all functionality to each coordinate in the noise map
-                    float sampleX = (x - halfWidth) / scale * frequency + octaveOffsets[i].x;
-                    float sampleY = (y - halfHeight) / scale * frequency + octaveOffsets[i].y;
+                    float sampleX = (x - halfWidth + octaveOffsets[i].x) / scale * frequency;
+                    float sampleY = (y - halfHeight + octaveOffsets[i].y) / scale * frequency;
 
                     // Perlin noise calculation, allowed to use negative values for increased visual appeal
                     float perlinValue = Mathf.PerlinNoise(sampleX, sampleY) * 2 - 1;
@@ -74,10 +84,10 @@ public static class Noise
                 }
 
                 // Set max and min noise heights if need be
-                if (noiseHeight > maxNoiseHeight) {
-                    maxNoiseHeight = noiseHeight;
-                } else if (noiseHeight < minNoiseHeight) {
-                    minNoiseHeight = noiseHeight;
+                if (noiseHeight > maxLocalNoiseHeight) {
+                    maxLocalNoiseHeight = noiseHeight;
+                } else if (noiseHeight < minLocalNoiseHeight) {
+                    minLocalNoiseHeight = noiseHeight;
                 }
 
                 // Actual assigning of the value to the noise map
@@ -88,7 +98,14 @@ public static class Noise
         // Second pass on the noise map values to apply a reverse linear interpolation (a method of fitting the values to the curve we want)
         for (int y = 0; y < mapHeight; y++) {
             for (int x = 0; x < mapWidth; x++) {
-                noiseMap[x, y] = Mathf.InverseLerp(minNoiseHeight, maxNoiseHeight, noiseMap[x, y]);
+                if (normalizeMode == NormalizeMode.Local) {
+                    // Map is not infinite
+                    noiseMap[x, y] = Mathf.InverseLerp(minLocalNoiseHeight, maxLocalNoiseHeight, noiseMap[x, y]);
+                } else {
+                    // Map is infinite
+                    float normalizedHeight = (noiseMap[x, y] + 1) / (maxPossibleHeight);
+                    noiseMap[x, y] = Mathf.Clamp(normalizedHeight, 0, int.MaxValue);
+                }
             }
         }
 
