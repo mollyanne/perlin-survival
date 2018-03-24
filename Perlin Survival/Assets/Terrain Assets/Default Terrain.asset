@@ -12,7 +12,7 @@ MonoBehaviour:
   m_Name: Default Terrain
   m_EditorClassIdentifier: 
   autoUpdate: 1
-  uniformScale: 9.62
+  uniformScale: 8.99
   useFlatShading: 0
   useFalloff: 0
   meshHeightMultipiler: 38.16
